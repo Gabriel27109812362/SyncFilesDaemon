@@ -5,31 +5,17 @@
 #include<sys/types.h>
 #include<fcntl.h>
 #include<string.h>
-#include <dirent.h>
+#include<dirent.h>
+#include<stdarg.h> //unknown number of arguments
 
-
-//returns non zero value if path is directory
-int isDirectory(const char *path) {
-    struct stat buffer;     //<sys/stat.h>
-    stat(path, &buffer);
-    return S_ISDIR(buffer.st_mode);
-}
-
-int isRegularFile(const char *path) {
-    struct stat path_stat;  //<sys/stat.h>
-    stat(path, &path_stat);
-    return S_ISREG(path_stat.st_mode);
-}
-
-void writeToLog(int *log, char *buffer, size_t bytes) {
-
-}
-
+void writeToLog(int log, char* format, ...);
+int isDirectory(const char *path);
+void copyFile(char *srcPath, char *destPath);
+int isRegularFile(const char *path);
 
 void daemonize() {
 
 }
-
 
 int main(int argc, const char *argv[]) {
     
@@ -58,18 +44,14 @@ int main(int argc, const char *argv[]) {
     
         int daemonLog = open("daemonLog.txt", O_CREAT | O_WRONLY | O_TRUNC);
         char *buffer;
-        buffer = "STARTED SUCCES\n";
-        size_t bytes = strlen(buffer);
-        write(daemonLog, buffer, bytes);
+        writeToLog(daemonLog, "STARTED SUCCES\n");
+        size_t bytes;
 
         sid = setsid();
 
         // Error checking
         if(sid<0) {
-        buffer = "SID ERROR\n" ;
-        bytes = strlen(buffer);
-        write(daemonLog, buffer, bytes);
-
+        writeToLog(daemonLog, "\nSID ERROR");
         close(daemonLog);
         exit(EXIT_FAILURE); 
         }
@@ -79,9 +61,7 @@ int main(int argc, const char *argv[]) {
         
         // Error checking
         if(chdir("/") < 0) {
-            buffer="CHANGE DIRECTORY ERROR";
-            bytes = strlen(buffer);
-
+            writeToLog(daemonLog, "\nCHANGE DIRECTORY ERROR");
             close(daemonLog);
             exit(EXIT_FAILURE);
         }
@@ -91,28 +71,18 @@ int main(int argc, const char *argv[]) {
 
     char buffer2[1024];
 
-
     while(1) {
-
-        snprintf(buffer2,1024,"\nENTER INFINITE LOOP\n");
-        bytes = strlen(buffer2);
-        write(daemonLog, buffer2, bytes);
+       
+        writeToLog(daemonLog, "\nENTER INFINITE LOOP\n");
 
         if(argv[3] == NULL) {
-            snprintf(buffer2,1024,"DAEMON SLEEP 300 sec.\n");
-            bytes = strlen(buffer2);
-            write(daemonLog, buffer2, bytes);
+            writeToLog(daemonLog, "DAEMON SLEEP 300 sec.\n");
             sleep(300);
         } else {
-            snprintf(buffer2,1024,"DAEMONN SLEEP %s sec.\n", argv[3]);
-            bytes = strlen(buffer2);
-            write(daemonLog, buffer2, bytes);
+            writeToLog(daemonLog, "DAEMON SLEEP %s sec.\n", argv[3]);
             sleep(atoi(argv[3]));
         }
-        buffer = "DAEMON WOKE UP\n";
-        bytes = strlen(buffer2);
-        write(daemonLog, buffer2, bytes);
-
+        writeToLog(daemonLog, "DAEMON WOKE UP\n");
 
         DIR *src = NULL, *dest = NULL; // directory pointer, DIR object
         
@@ -126,13 +96,10 @@ int main(int argc, const char *argv[]) {
         
         // Error checking 
         if(!src && !dest) {
-            buffer = "DIRECTORY STREAM ERROR\n" ;
-            bytes = strlen(buffer);
-            write(daemonLog, buffer, bytes);
+            writeToLog(daemonLog, "\nDIRECTORY STREAM ERROR");
             close(daemonLog);
             exit(EXIT_FAILURE); 
         }
-
         // if directory stream created successfully, we can read entries from directory
         // struct dirent * readdir (DIR *dir);  - returns entries one by one from given DIR object
         // readdir() obtains entries one by one, untill the one we are searching for is found 
@@ -142,38 +109,83 @@ int main(int argc, const char *argv[]) {
         // 'd_name' field in structure is the name of single file within the directory 
         struct  dirent *srcEntry, *destEntry; // entries in directories
 
-        
-        
         // Reading/synchronizing directories
             while( (srcEntry = readdir(src)) != NULL) {
+
+                char srcFilePath[1024];
+                char destFilePath[1024];
+
                 destEntry = readdir(dest);
-                buffer = "READING ENTRIES...\n";
-                bytes = strlen(buffer);
-                write(daemonLog, buffer, bytes);
+                writeToLog(daemonLog, "READING ENTRIES...\n");
 
-                //TODO: DT_REG undefined??? Can be fixed with  isRegularFile();
                 if(srcEntry->d_type == DT_REG) {
-                    char *filename = srcEntry->d_name;
-                    snprintf(buffer2, 1024, filename, "\n");
-                    bytes = strlen(buffer2);
-                    write(daemonLog, buffer2, bytes);
-                    
-                    snprintf(buffer2, 1024, argv[2], "\n");
-                    bytes = strlen(buffer2);
-                    write(daemonLog, buffer2, bytes);
+                    char *fileName = srcEntry->d_name;
 
+                    snprintf(srcFilePath,1024,"%s/%s", argv[1], fileName);
+                    snprintf(destFilePath,1024,"%s/%s", argv[2], fileName);
+
+                    struct stat sb;
+                    
+                    //write to log stat of current entry, testing/educational purpose mainly, size of file will be used later
+                    if(stat(srcFilePath, &sb) != -1) {
+                        writeToLog(daemonLog, "\nDirectory:      %s\nFile:           %s\nFile Full Path: %s\nSize:           %ld\n",
+                        argv[1], fileName, srcFilePath, sb.st_size);
+                    }
+
+                    copyFile(srcFilePath,destFilePath);
                 }
-                if( destEntry != NULL && destEntry->d_type == DT_REG) {
+
+                /*if( destEntry != NULL && destEntry->d_type == DT_REG) {
                     char *fileName = destEntry->d_name;
                     snprintf(buffer2, 1024, fileName, "\n");
                     bytes = strlen(buffer);
                     write(daemonLog, buffer, bytes);
-                }
+                }*/
             }
             closedir(src);  // close source directory stream
             closedir(dest); // close destination directory stream
             // TODO: Error checking for closedir()
         }
     }
-  
+}
+
+void writeToLog(int log, char* format, ...) {
+    size_t bytes;
+    char buffer[1024];
+    va_list argPtr;
+    va_start(argPtr, format);
+    vsnprintf(buffer,1024, format, argPtr);
+    bytes = strlen(buffer);
+    write(log, buffer, bytes);
+    va_end(argPtr);
+}
+
+void copyFile(char *srcFilePath, char *destFilePath)
+{
+    int src, dest;
+    int bufferSize = 1000;
+    char *buffer = malloc(bufferSize*sizeof(char));
+    
+    src = open(srcFilePath, O_RDONLY);
+    dest = open(destFilePath, O_CREAT | O_WRONLY);  
+    
+    size_t bytesRead;   
+
+    while ((bytesRead = read(src, buffer, bufferSize)) > 0){
+        write(dest, buffer, bytesRead);
+        printf("bytes: %ld\n",bytesRead); 
+    }
+}
+
+//returns non zero value if path is directory
+int isDirectory(const char *path) {
+    struct stat sb;     //<sys/stat.h>
+    stat(path, &sb);
+    return S_ISDIR(sb.st_mode);
+}
+
+int isRegularFile(const char *path) {
+    struct stat sb;  //<sys/stat.h>
+    stat(path, &sb);
+    return S_ISREG(sb.st_mode);
 }
