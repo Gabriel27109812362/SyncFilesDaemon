@@ -6,7 +6,6 @@
 #include <fcntl.h>
 #include <string.h>
 #include <dirent.h>
-#include <stdarg.h> // variadic function which takes undefined number of arguments: //writeToLog()
 #include <getopt.h>
 #include <sys/mman.h>
 #include <signal.h>
@@ -15,6 +14,7 @@
 #include <sys/time.h>
 #include <syslog.h>
 #include <errno.h>
+#include <stdarg.h>
 
 int sleepValue = 300;
 long int sizeThreshold = 100000;
@@ -28,6 +28,7 @@ void explore(char *srcDirectory, char *destDirectory);
 int isDirectory(const char *path);
 int isRegularFile(const char *path);
 int fileExists(char *path);
+int dirExists(char* path);
 void copyFile(char *srcPath, char *destPath, size_t fileSize);
 static time_t getFileModificationTime(const char *path);
 void updateModificationTime(const char *path, time_t srcTime);
@@ -36,7 +37,6 @@ void deleteDirectoryTree(char* path);
 int main(int argc, char *argv[]) {
 
     int opt;
-    //int daemonLog = open("daemonLog.txt", O_CREAT | O_WRONLY | O_TRUNC);
 
     while((opt=getopt(argc,argv, "RS:B:")) != -1) {
         switch(opt) {
@@ -53,14 +53,18 @@ int main(int argc, char *argv[]) {
                 break;
         }
     }
-    if(isDirectory(argv[argc-2]) == 0 || isDirectory(argv[argc-1]) == 0) { //check if arguments are directories,
 
-        ////writeToLog(daemonLog, "\nERROR: ARGUMENTS ARE NOT DIRECTORIES\n");
-        //close(daemonLog);
+    DIR *dir1;
+    DIR *dir2;
+    if(!dirExists(argv[argc-2]) || !dirExists(argv[argc-1])) {    //check if arguments are directories,
+        printf("ERROR: both paths need to be directories!\n");
         exit(EXIT_FAILURE);
     } else {
+        closedir(dir1);
+        closedir(dir2);
+
         setlogmask(LOG_UPTO(LOG_NOTICE)); //set log mask
-        syslog(LOG_NOTICE, "\nProgram started by user: %d", getuid());
+        syslog(LOG_NOTICE, "\n%s: Program started by user: %d",asctime(getCurrentDate()), getuid());
 
         daemonize();
 
@@ -69,12 +73,10 @@ int main(int argc, char *argv[]) {
 
             sigusr1Flag = 0;
 
-            
-
-            syslog(LOG_NOTICE, "%s daemon falls asleep for %d sec(SIGUSR1 wakes it up)", asctime(getCurrentDate()),sleepValue);
+            syslog(LOG_NOTICE, "%s: daemon falls asleep for %d sec(SIGUSR1 wakes it up)", asctime(getCurrentDate()),sleepValue);
             sleep(sleepValue);
             if( !sigusr1Flag)
-                syslog(LOG_NOTICE, "daemon woke up naturally");
+                syslog(LOG_NOTICE, "%s: daemon woke up naturally", asctime(getCurrentDate()));
 
             explore(argv[argc-2],argv[argc-1]); // Reading/synchronizing directories
         }
@@ -93,42 +95,36 @@ struct tm  *getCurrentDate() {
 void signalHandler(int signum) {
     if(signum == SIGUSR1) {
 
-        syslog(LOG_NOTICE, "daemon woke up using signal SIGUSR1");
+        syslog(LOG_NOTICE, "%s: daemon woke up using signal SIGUSR1", asctime(getCurrentDate()));
 
         sigusr1Flag = 1;
     }
 }
 
 void daemonize() {
-    pid_t pid=0, sid=0; //process ID and session ID
+    pid_t pid=0, sid=0;
 
         pid = fork();
 
         if(pid < 0) {
-            ////writeToLog(log, "\nERROR: PROCESS ID\n");
-            //close(log);
             _exit(EXIT_FAILURE);
         }
         else if(pid > 0) {
+            syslog(LOG_NOTICE, "%s: Program is daemon process from now on", asctime(getCurrentDate()));
             _exit(EXIT_SUCCESS);
         }
         umask(0);
-        //////writeToLog(log, "\nDAEMON STARTED SUCCESSFULLY\n");
-        syslog(LOG_NOTICE, "Program became daemon process");
+        
 
         sid = setsid();
 
         if(sid<0) {
-            //writeToLog(log, "\nERROR: SESSION ID");
-            //close(log);
             exit(EXIT_FAILURE);
         }
         // Change current working directory
         chdir("/");
 
         if(chdir("/") < 0) {
-            //writeToLog(log, "\nERROR: CHANGING DIRECTORY FAILED");
-            //close(log);
             exit(EXIT_FAILURE);
         }
         close(STDIN_FILENO);
@@ -181,6 +177,15 @@ int fileExists (char *path) {
   return (stat (path, &sb) == 0);
 }
 
+int dirExists(char* path){
+    DIR * dir;
+
+    if( (dir = opendir(path)) == NULL )
+        return 0;
+    closedir(dir);
+    return 1;
+}
+
 static time_t getFileModificationTime(const char *path) {
     struct stat sb;
     if (stat(path, &sb) == 0)
@@ -208,11 +213,9 @@ void deleteDirectoryTree(char* path) {
     char newPath[1024] = {0};
     dest = opendir(path);
 
-    if(!dest) {
-        ////writeToLog(log, "\nERROR: DIRECTORY STREAM\n");
-        //close(log);
+    if(!dest)
         exit(EXIT_FAILURE);
-    }
+
     while ((entry = readdir(dest)) != NULL) {
         if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
             continue;       //skip symbolic attachments to avoid infinite recursion
@@ -222,7 +225,7 @@ void deleteDirectoryTree(char* path) {
             deleteDirectoryTree(newPath);
         } else {
             unlink(newPath);
-            syslog(LOG_NOTICE, "File deleted successfully: %s", newPath);
+            syslog(LOG_NOTICE, "%s: File deleted successfully: %s", asctime(getCurrentDate()), newPath);
         }
     }
     closedir(dest);
@@ -238,11 +241,8 @@ void explore(char *srcDirectory, char *destDirectory) {
     src = opendir(srcDirectory);
     dest = opendir(destDirectory);
 
-    if(!src && !dest) {
-        //////writeToLog(log, "\nERROR: DIRECTORY STREAM");
-        //close(log);
+    if(!src && !dest) 
         exit(EXIT_FAILURE);
-    }
 
     struct  dirent *srcEntry, *destEntry;
     char srcFilePath[1024], destFilePath[1024];
@@ -263,10 +263,8 @@ void explore(char *srcDirectory, char *destDirectory) {
                     int status;
                     status = unlink(destFilePath);
                     if(status == 0) {
-                        syslog(LOG_NOTICE, "File deleted successfully: %s", destFilePath);
+                        syslog(LOG_NOTICE, "%s: File deleted successfully: %s", asctime(getCurrentDate()), destFilePath);
                     } else {
-                        ////writeToLog(log, "\nERROR: UNABLE TO DELETE THE FILE");
-                        //close(log);
                         exit(EXIT_FAILURE);
                     }
                 }
@@ -305,13 +303,13 @@ void explore(char *srcDirectory, char *destDirectory) {
                     if(srcTime > destTime || srcTime < destTime) {
 
                         copyFile(srcFilePath,destFilePath, sb.st_size);
-                        syslog(LOG_NOTICE, "File copied successfully: %s", srcFilePath);
+                        syslog(LOG_NOTICE, "%s: File copied successfully: %s", asctime(getCurrentDate()), srcFilePath);
                         updateModificationTime(destFilePath, srcTime);
                     }
                 }
             } else {
                 copyFile(srcFilePath,destFilePath, sb.st_size);
-                syslog(LOG_NOTICE, "File copied successfully: %s", srcFilePath);
+                syslog(LOG_NOTICE, "%s: File copied successfully: %s", asctime(getCurrentDate()), srcFilePath);
             }
         } else if(srcEntry->d_type == DT_DIR && recursionFlag == 1) { 
 
@@ -325,13 +323,13 @@ void explore(char *srcDirectory, char *destDirectory) {
 
             if (stat(destRecursionPath, &st) == -1) {
                 mkdir(destRecursionPath, 0777);
-                syslog(LOG_NOTICE, "Directory created successfully: %s", destRecursionPath);
+                syslog(LOG_NOTICE, "%s: Directory created successfully: %s",asctime(getCurrentDate()), destRecursionPath);
             }
         
             explore(srcRecursionPath,destRecursionPath);
         } else 
             continue;
     }
-    closedir(src);  // close source directory stream
-    closedir(dest); // close destination directory stream
+    closedir(src);
+    closedir(dest);
 }
