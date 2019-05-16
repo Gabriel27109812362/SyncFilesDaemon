@@ -6,14 +6,17 @@
 #include <fcntl.h>
 #include <string.h>
 #include <dirent.h>
-#include <stdarg.h> // variadic function which takes undefined number of arguments: writeTolog()
-#include <getopt.h> //compilation option -R for recursive exploring
-#include <sys/mman.h> //mmap
+#include <stdarg.h>
+#include <getopt.h>
+#include <sys/mman.h>
 #include <errno.h>
 #include <signal.h>
 #include <utime.h>
 #include <sys/time.h>
 
+//int signalFlag = 0;
+
+//void signalHandler(int signum, int log);
 void daemonize(int log);
 void writeToLog(int log, char* format, ...);
 int isDirectory(const char *path);
@@ -25,50 +28,56 @@ void updateModificationTime(const char *path, time_t srcTime);
 void deleteDirectoryTree(char* path, int log);
 void explore(char *srcDirectory, char *destDirectory, int log, int recursionFlag, long int sizeThreshold);
 
-
-
 int main(int argc, char *argv[]) {
 
     int opt;
     int recursionFlag = 0, sleepValue = 300, sizeThreshold = 100000;
     int daemonLog = open("daemonLog.txt", O_CREAT | O_WRONLY | O_TRUNC);
 
-    writeToLog(daemonLog, "\nSRC: %s\nDEST: %s\n", argv[argc-2], argv[argc-1]);
+    writeToLog(daemonLog, "Source: %s\nDestination: %s\n", argv[argc-2], argv[argc-1]);
     while((opt=getopt(argc,argv, "RS:B:")) != -1) {
         switch(opt) {
             case 'R':
                 recursionFlag = 1;
-                writeToLog(daemonLog, "\n               RECURSION                    \n");
                 break;
             case 'S':
                 sleepValue = atoi(optarg);
-                writeToLog(daemonLog, "\n               CUSTOM SLEEP                    \n");
                 break;
             case 'B':
                 sizeThreshold = atoi(optarg);
-                writeToLog(daemonLog,"\n                CUSTOM SIZE             \n");
                 break;
              default:
                 break;
         }
     }
+    
     if(isDirectory(argv[argc-2]) == 0 || isDirectory(argv[argc-1]) == 0) { //check if arguments are directories,
         writeToLog(daemonLog, "\nERROR: ARGUMENTS ARE NOT DIRECTORIES\n");
         close(daemonLog);
         exit(EXIT_FAILURE);
     } else {
         daemonize(daemonLog);
+        //signal(SIGUSR1, signalHandler);
+
         while(1) {
+            //signalFlag = 0;
 
-            writeToLog(daemonLog, "\nENTER INFINITE LOOP\n");
-            writeToLog(daemonLog, "DAEMON SLEEP %d sec.\n", sleepValue);
+            writeToLog(daemonLog, "daemon sleep %d sec.\n", sleepValue);
             sleep(sleepValue);
-            writeToLog(daemonLog, "DAEMON WOKE UP\n");
-
-            explore(argv[argc-2],argv[argc-1], daemonLog, recursionFlag, sizeThreshold); // Reading/synchronizing directories
+            //if(!signalFlag){
+            writeToLog(daemonLog, "daemon woke up naturally\n");
+            //}
+            explore(argv[argc-2],argv[argc-1], daemonLog, recursionFlag, sizeThreshold);
         }
     }
 }
+
+// void signalHandler(int signum, int log){
+//     if(signum == SIGUSR1){
+//         writeToLog(log, "daemon woke up using signal\n");
+//         signalFlag = 1;
+//     }
+// }
 
 void writeToLog(int log, char* format, ...) {
     size_t bytes;
@@ -86,18 +95,19 @@ void daemonize(int log) {
 
         pid = fork();
 
-        // Error checking
-        if(pid < 0) {
+        
+        if(pid < 0) {       // Error checking
             writeToLog(log, "\nERROR: PROCESS ID\n");
             close(log);
             _exit(EXIT_FAILURE);
         }
-        else if(pid > 0) {
+        else if(pid > 0) {  
             _exit(EXIT_SUCCESS);
         }
-        umask(0);
-        writeToLog(log, "\nDAEMON STARTED SUCCESSFULLY\n");
+        umask(0); //permission mask for creating files
+        writeToLog(log, "Daemon started successfully\n");
 
+        //session id
         sid = setsid();
 
         // Error checking
@@ -114,9 +124,6 @@ void daemonize(int log) {
             close(log);
             exit(EXIT_FAILURE);
         }
-        close(STDIN_FILENO);
-        close(STDOUT_FILENO);
-        close(STDERR_FILENO);
 }
 
 void copyFile(char *srcFilePath, char *destFilePath, size_t fileSize,long int sizeThreshold, int log) {
@@ -129,17 +136,16 @@ void copyFile(char *srcFilePath, char *destFilePath, size_t fileSize,long int si
     dest = open(destFilePath, O_CREAT | O_WRONLY);
 
     if(fileSize >= sizeThreshold) {
+        writeToLog(log, "\nmapping file..\n");
         buffer = mmap(NULL, fileSize, PROT_READ, MAP_PRIVATE, src,0);
-        writeToLog(log, "\nMAPPING FILE...\n");
         write(dest, buffer, fileSize);
     } else {
         bufferSize = 100;
         buffer = malloc(bufferSize*sizeof(char));
-        writeToLog(log, "\n\n WRTING FILE...\n");
+        writeToLog(log, "\n\n reading file...\n");
 
         while ((bytesRead = read(src, buffer, bufferSize)) > 0)
         write(dest, buffer, bytesRead);
-
     }
 
     while ((bytesRead = read(src, buffer, bufferSize)) > 0) 
@@ -162,8 +168,7 @@ int isRegularFile(const char *path) {
     return S_ISREG(sb.st_mode);
 }
 
-int fileExists (char *path)
-{
+int fileExists (char *path) {
   struct stat sb;   
   return (stat (path, &sb) == 0);
 }
@@ -183,7 +188,7 @@ void updateModificationTime(const char *path, time_t srcTime) {
     if (utime(path, &ub) == 0) {
         srcTime = sb.st_mtime;
     
-        ub.actime = sb.st_atime; // keep atime unchanged 
+        ub.actime = sb.st_atime;
         ub.modtime = srcTime;   // set mtime to source file time
         utime(path,&ub);
     }
@@ -220,11 +225,6 @@ void explore(char *srcDirectory, char *destDirectory, int log, int recursionFlag
 
     src = opendir(srcDirectory);       // create source directory stream
     dest = opendir(destDirectory);      // create source directory stream
-        // directory stream, opendir returns DIR object, <sys/types.h>, <dirent.h>
-        // A directory stream is little more than a file descriptor representing the open directory,
-        // some metadata, and a buffer to hold the directory's contents.
-        // Consequently, it is possible to obtain the file descriptor behind a given directory stream:
-        // function for obtaining file descriptor: int dirfd (DIR *dir);
 
         // Error checking
     if(!src && !dest) {
@@ -233,12 +233,6 @@ void explore(char *srcDirectory, char *destDirectory, int log, int recursionFlag
         exit(EXIT_FAILURE);
     }
         // if directory stream created successfully, we can read entries from directory
-        // struct dirent * readdir (DIR *dir);  - returns entries one by one from given DIR object
-        // readdir() obtains entries one by one, untill the one we are searching for is found
-        // or the entire directory is read, at which time it returns NULL
-
-        // struct 'dirent' defined in <dirent.h>
-        // 'd_name' field in structure is the name of single file within the directory
     struct  dirent *srcEntry, *destEntry; // entries in directories
     char srcFilePath[1024], destFilePath[1024];
     char srcFileName[1024], destFileName[1024];
@@ -247,36 +241,24 @@ void explore(char *srcDirectory, char *destDirectory, int log, int recursionFlag
 
     while( (destEntry = readdir(dest)) != NULL ) {
 
-        writeToLog(log, "READING DESTINATION ENTRIES #2...\n");
         if(destEntry->d_type == DT_REG) {
             snprintf(destFileName, 1024, "%s", destEntry->d_name);
             snprintf(destFilePath,1024,"%s/%s", destDirectory, destFileName);
 
-            if(stat(destFilePath, &sb) != -1) {
-                writeToLog(log, "\nDirectory:      %s\nFile:           %s\nFile Full Path: %s\nSize:           %ld\n",
-                    destDirectory, destFileName, destFilePath, sb.st_size);
-            }
-
-            writeToLog(log, "CHECKING IF FILE EXISTS IN SOURCE DIRECTORY #2...\n");
             snprintf(srcFilePath,1024,"%s/%s", srcDirectory, destFileName);
-            writeToLog(log, "\nSOURCE FILE: #1... %s\n", destFilePath);
-                        ///////////////////////////////////////////
             if (fileExists(srcFilePath) ) {
-                writeToLog(log, "\n\n\n\n\n\n\n\n\n\n\n FILE REALLY EXISTS #2... %s\n\n\n", destFilePath);
-                if(isRegularFile(destFilePath)) {
+                if(isRegularFile(srcFilePath)) {
 
                         }
             } else {
-                writeToLog(log, "\n\n\n\n\n\n\n\n\n\n\n FILE DOESNT EXIST, REMOVING #2... %s\n\n\n", destFilePath);
-                writeToLog(log, "\nDELETING FILES #2\n");
-                        
+
                 int status;
                 status = unlink(destFilePath);
                 if(status == 0) {
-                    writeToLog(log, "\nFILE DELETED SUCCESSFULLY");
+                    writeToLog(log, "\nfile deleted successfully: %s \n",destFilePath );
                 } else {
                     writeToLog(log, "\nERROR: UNABLE TO DELETE THE FILE");
-                    writeToLog(log,"\n\n****\n\n\nERROR:  unlink()! %s\n", strerror(errno));
+                    writeToLog(log,"\nerrno: %s\n", strerror(errno));
                     close(log);
                     exit(EXIT_FAILURE);
                 }
@@ -295,49 +277,30 @@ void explore(char *srcDirectory, char *destDirectory, int log, int recursionFlag
             }
         } else 
             continue;
-        //     struct stat st = {0};
-        //     snprintf(srcRecursionPath,1024,"%s/%s", srcDirectory, srcEntry->d_name);
-        //     snprintf(destRecursionPath,1024,"%s/%s", destDirectory, srcEntry->d_name);
-        //     if (stat(destRecursionPath, &st) == -1) {
-        //         mkdir(destRecursionPath, 0777);
-        //     }
-        //     explore(srcRecursionPath,destRecursionPath, log, recursionFlag);
-        // } else {
-        //     continue;
-        // }
     }
     rewinddir(src);
     rewinddir(dest);
 
     while( (srcEntry = readdir(src)) != NULL ) {
 
-        writeToLog(log, "READING SOURCE ENTRIES #1...\n");
         if(srcEntry->d_type == DT_REG) {
             snprintf(srcFileName, 1024, "%s", srcEntry->d_name);
             snprintf(srcFilePath,1024,"%s/%s", srcDirectory, srcFileName);
                     
-            if(stat(srcFilePath, &sb) != -1) {
-                writeToLog(log, "\nDirectory:      %s\nFile:           %s\nFile Full Path: %s\nSize:           %ld\n",
-                srcDirectory, srcFileName, srcFilePath, sb.st_size);
-            }
-            writeToLog(log, "CHECKING IF FILE EXISTS IN DESTINATION DIRECTORY #1...\n");
             snprintf(destFilePath,1024,"%s/%s", destDirectory, srcFileName);
-            writeToLog(log, "\nDESTINATION FILE: #1... %s\n", destFilePath);
 
             if (fileExists(destFilePath) ) {
-                writeToLog(log, "\n\n\n\n\n\n\n\n\n\n\n FILE REALLY EXISTS #1... %s\n\n\n", destFilePath);
                 if(isRegularFile(destFilePath)){ 
-                    writeToLog(log, "\n\n\n\n\n\n\n\n\n\n\n FILE IS REGULAR FILE EXISTS #1... %s\n\n\n", destFilePath);
                     time_t srcTime = getFileModificationTime(srcFilePath);
                     time_t destTime = getFileModificationTime(destFilePath);
                     if(srcTime > destTime || srcTime < destTime){
-                        writeToLog(log, "\n\n\n\n\n\n\n\n\n\n\n COPYING FILE  #1... %s\n\n\n", destFilePath);
+                        writeToLog(log, "\n\n\n\n\n\n\n\n\n\n\n COPYING FILE ... %s\n\n\n", destFilePath);
                         copyFile(srcFilePath,destFilePath, sb.st_size, sizeThreshold, log);
                         updateModificationTime(destFilePath, srcTime);
                     }
                 }
             } else {
-                writeToLog(log, "\n\n\n\n\n\n\n\n\n\n\n FILE DOESNT EXISTS, CREATING #1... %s\n\n\n", destFilePath);
+               // writeToLog(log, "\n\n\n\n\n\n\n\n\n\n\n FILE DOESNT EXISTS, CREATING #1... %s\n\n\n", destFilePath);
                 copyFile(srcFilePath,destFilePath, sb.st_size, sizeThreshold, log);
             }
         } else if(srcEntry->d_type == DT_DIR && recursionFlag == 1) {
@@ -356,5 +319,4 @@ void explore(char *srcDirectory, char *destDirectory, int log, int recursionFlag
     }
     closedir(src);  // close source directory stream
     closedir(dest); // close destination directory stream
-            //TODO: Error checking for closedir()
 }
