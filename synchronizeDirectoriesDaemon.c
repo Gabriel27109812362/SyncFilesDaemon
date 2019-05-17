@@ -54,21 +54,17 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    DIR *dir1;
-    DIR *dir2;
     if(!dirExists(argv[argc-2]) || !dirExists(argv[argc-1])) {    //check if arguments are directories,
         printf("ERROR: both paths need to be directories!\n");
         exit(EXIT_FAILURE);
     } else {
-        closedir(dir1);
-        closedir(dir2);
 
         setlogmask(LOG_UPTO(LOG_NOTICE)); //set log mask
         syslog(LOG_NOTICE, "\n%s: Program started by user: %d",asctime(getCurrentDate()), getuid());
 
         daemonize();
 
-        signal(SIGUSR1, signalHandler); //Powiązanie sygnału SIGUSR1 ze zdefiniowanym handlerem
+        signal(SIGUSR1, signalHandler); //binding SIGUSR1 with handler
         while(1) {
 
             sigusr1Flag = 0;
@@ -222,16 +218,15 @@ void deleteDirectoryTree(char* path) {
 
         sprintf(newPath, "%s/%s", path, entry->d_name);
         if (isDirectory(newPath)) {
-            deleteDirectoryTree(newPath);
+            deleteDirectoryTree(newPath);   // recursion
         } else {
-            unlink(newPath);
+            unlink(newPath);  //remove file
             syslog(LOG_NOTICE, "%s: File deleted successfully: %s", asctime(getCurrentDate()), newPath);
         }
     }
     closedir(dest);
-    rmdir(path);
+    rmdir(path); // remove empty directory
     syslog(LOG_NOTICE, "Directory deleted successfully: %s", path);
-    
 }
 
 void explore(char *srcDirectory, char *destDirectory) {
@@ -247,18 +242,21 @@ void explore(char *srcDirectory, char *destDirectory) {
     struct  dirent *srcEntry, *destEntry;
     char srcFilePath[1024], destFilePath[1024];
     char srcFileName[1024], destFileName[1024];
-    struct stat sb;
-    char srcRecursionPath[1024], destRecursionPath[1024];
+    struct stat sb;     // used for getting size of file
+    
 
-    while( (destEntry = readdir(dest)) != NULL ) {
+    while( (destEntry = readdir(dest)) != NULL ) { 
+        //loop through entries in destination folder, to find and remove those that 
+        //don't exist in source directory, 
+        //therefore should be removed 
 
-        if(destEntry->d_type == DT_REG) {
+        if(destEntry->d_type == DT_REG) { //regular file
             snprintf(destFileName, 1024, "%s", destEntry->d_name);
             snprintf(destFilePath,1024,"%s/%s", destDirectory, destFileName);
 
                 snprintf(srcFilePath,1024,"%s/%s", srcDirectory, destFileName);
                 if (fileExists(srcFilePath) ) {
-                    
+                    continue;
                 } else {
                     int status;
                     status = unlink(destFilePath);
@@ -268,7 +266,7 @@ void explore(char *srcDirectory, char *destDirectory) {
                         exit(EXIT_FAILURE);
                     }
                 }
-        } else if(destEntry->d_type == DT_DIR && recursionFlag == 1) {
+        } else if(destEntry->d_type == DT_DIR && recursionFlag == 1) { // directories/recursion
 
             if (strcmp(destEntry->d_name, ".") == 0 || strcmp(destEntry->d_name, "..") == 0)
                 continue;       //skip symbolic attachments to avoid infinite recursion
@@ -288,7 +286,10 @@ void explore(char *srcDirectory, char *destDirectory) {
     rewinddir(dest);
 
     while( (srcEntry = readdir(src)) != NULL ) {
-
+        //loop through entries in source folder, to find and copy those that 
+        //don't exist/are not up to date in destination directory, 
+        //therefore should be copied/created
+    
         if(srcEntry->d_type == DT_REG) {
             snprintf(srcFileName, 1024, "%s", srcEntry->d_name);
             snprintf(srcFilePath,1024,"%s/%s", srcDirectory, srcFileName);
@@ -317,7 +318,9 @@ void explore(char *srcDirectory, char *destDirectory) {
                 continue;       //skip symbolic attachments to avoid infinite recursion
                 
             struct stat st = {0};
-            
+
+            char srcRecursionPath[1024], destRecursionPath[1024];
+
             snprintf(srcRecursionPath,1024,"%s/%s", srcDirectory, srcEntry->d_name);
             snprintf(destRecursionPath,1024,"%s/%s", destDirectory, srcEntry->d_name);
 
